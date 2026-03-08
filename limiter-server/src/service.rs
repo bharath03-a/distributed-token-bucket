@@ -51,75 +51,6 @@ impl LimiterServiceImpl {
             .map_err(|e| Status::internal(format!("Redis connection failed: {}", e)))
     }
 
-    /// Non-atomic path for tokens > 1 (less common).
-    async fn allow_non_atomic(&self, key: String, tokens: u32) -> Result<Response<AllowResponse>, Status> {
-        let redis_key = self.redis_key(&key);
-        let mut conn = self.get_conn().await?;
-
-        let raw: Option<String> = conn.get(&redis_key).await.map_err(|e| {
-            Status::internal(format!("Redis GET failed: {}", e))
-        })?;
-
-        let (config, state) = if let Some(s) = raw {
-            let parts: Vec<&str> = s.split(':').collect();
-            let (capacity, refill_rate) = if parts.len() >= 5 {
-                (
-                    parts[3].parse().unwrap_or(self.default_capacity),
-                    parts[4].parse().unwrap_or(self.default_refill_rate),
-                )
-            } else {
-                (self.default_capacity, self.default_refill_rate)
-            };
-            let config = TokenBucketConfig::new(capacity, refill_rate)
-                .map_err(|e| Status::invalid_argument(e.to_string()))?;
-            let state = BucketState {
-                tokens: parts.get(0).and_then(|p| p.parse().ok()).unwrap_or(config.capacity as f64),
-                last_refill_secs: parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(0),
-                last_refill_nanos: parts.get(2).and_then(|p| p.parse().ok()).unwrap_or(0),
-            };
-            (config, state)
-        } else {
-            let config = TokenBucketConfig::new(self.default_capacity, self.default_refill_rate)
-                .map_err(|e| Status::invalid_argument(e.to_string()))?;
-            let (secs, nanos) = {
-                let n = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap();
-                (n.as_secs(), n.subsec_nanos())
-            };
-            let state = BucketState {
-                tokens: config.capacity as f64,
-                last_refill_secs: secs,
-                last_refill_nanos: nanos,
-            };
-            (config, state)
-        };
-
-        let mut bucket = limiter_core::TokenBucket::from_state(config.clone(), state);
-        let result = bucket.try_consume(tokens as u64);
-        let new_state = bucket.state_after_refill();
-
-        let storage = format!(
-            "{}:{}:{}:{}:{}",
-            new_state.tokens,
-            new_state.last_refill_secs,
-            new_state.last_refill_nanos,
-            config.capacity,
-            config.refill_rate,
-        );
-
-        conn.set_ex::<_, _, ()>(&redis_key, &storage, 86400)
-            .await
-            .map_err(|e| Status::internal(format!("Redis SET failed: {}", e)))?;
-
-        match result {
-            Ok(()) => Ok(Response::new(AllowResponse { allowed: true, message: String::new() })),
-            Err(limiter_core::LimiterError::RateLimited) => {
-                Ok(Response::new(AllowResponse { allowed: false, message: "rate limited".into() }))
-            }
-            Err(e) => Err(Status::internal(e.to_string())),
-        }
-    }
 }
 
 #[tonic::async_trait]
@@ -130,11 +61,6 @@ impl LimiterService for LimiterServiceImpl {
         let key = req.key;
         let tokens = req.tokens.max(1);
 
-        // For tokens > 1, use non-atomic path (Lua script supports only 1 token for simplicity).
-        if tokens > 1 {
-            return self.allow_non_atomic(key, tokens).await;
-        }
-
         let redis_key = self.redis_key(&key);
         let mut conn = self.get_conn().await?;
 
@@ -143,6 +69,7 @@ impl LimiterService for LimiterServiceImpl {
             .key(&redis_key)
             .arg(self.default_capacity)
             .arg(self.default_refill_rate)
+            .arg(tokens)
             .invoke_async(&mut conn)
             .await
             .map_err(|e| Status::internal(format!("Redis script failed: {}", e)))?;

@@ -5,3 +5,11 @@ edition = "2021"
 
 [dependencies]
 thiserror = "2"
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "bucket"
+harness = false

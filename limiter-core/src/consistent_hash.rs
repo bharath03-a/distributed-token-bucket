@@ -8,10 +8,20 @@
 //! - **Naive mod**: `key % N` — adding/removing a node causes most keys to remap (thundering herd).
 //! - **Consistent hashing**: Keys map to a ring; each node owns a range. Adding a node only
 //!   remaps ~1/N of keys. Minimal disruption.
+//!
+//! ## Why XxHash64 instead of std DefaultHasher?
+//!
+//! `std::collections::hash_map::DefaultHasher` is explicitly documented as unstable: its output
+//! can differ between Rust versions and between processes (randomization via HashDoS protection).
+//! In a distributed system, two server instances hashing the same key with `DefaultHasher` could
+//! route it to *different* Redis shards — silently double-counting tokens and breaking rate limits.
+//! XxHash64 is deterministic, fast (comparable to a memory copy), and widely used in production
+//! distributed systems for exactly this reason.
 
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
+use xxhash_rust::xxh64::Xxh64;
 
 /// Virtual nodes (vnodes) per physical node for better distribution.
 const VIRTUAL_NODES: u32 = 150;
@@ -73,7 +83,8 @@ impl<T: Clone + Eq + Hash + std::fmt::Debug> Default for ConsistentHashRing<T> {
 }
 
 fn hash_key<K: Hash>(key: K) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    // Seed 0 is fine here — we need determinism across processes, not unpredictability.
+    let mut hasher = Xxh64::new(0);
     key.hash(&mut hasher);
     hasher.finish()
 }
