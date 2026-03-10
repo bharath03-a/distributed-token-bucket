@@ -25,14 +25,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing::info!(?config, "starting limiter server");
 
     let redis_url = config.redis_url.clone();
-    let client = redis::Client::open(redis_url.clone())?;
+    // Open one multiplexed connection at startup. All request handlers clone this — O(1),
+    // no new TCP connections. Avoids port exhaustion under high concurrency.
+    let conn = redis::Client::open(redis_url.clone())?
+        .get_multiplexed_tokio_connection()
+        .await?;
 
     // For single Redis, we use one "node" in the ring. For multiple Redis shards,
     // add each URL to the ring and use consistent hashing to pick one.
     let ring: Arc<ConsistentHashRing<String>> = Arc::new(ConsistentHashRing::new());
     ring.add_node(config.redis_url.clone());
 
-    let svc = LimiterServiceImpl::new(client, ring, config.default_capacity, config.default_refill_rate);
+    let svc = LimiterServiceImpl::new(conn, ring, config.default_capacity, config.default_refill_rate);
 
     let addr = config.listen_addr.parse()?;
     tracing::info!(%addr, "listening");

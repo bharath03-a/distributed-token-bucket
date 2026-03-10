@@ -1,6 +1,6 @@
 # Distributed Token Bucket Rate Limiter
 
-A high-performance distributed rate-limiting system built in Rust. Handles 100k+ requests/sec using token bucket algorithms, Redis for shared state, gRPC for the API, and consistent hashing for horizontal scaling.
+A high-performance distributed rate-limiting system built in Rust. Sustains **33,000+ req/s at p99 < 6 ms** (single Redis node, localhost) using token bucket algorithms, Redis Lua scripts for atomic state, gRPC for the API, and consistent hashing for horizontal scaling.
 
 ## Key Concepts (Distributed Systems)
 
@@ -34,18 +34,35 @@ A high-performance distributed rate-limiting system built in Rust. Handles 100k+
 
 ## Architecture
 
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client (gRPC)
+    participant S as Limiter Server (Tokio)
+    participant H as Hash Ring (XxHash64)
+    participant R as Redis (Shard 1)
+
+    C->>S: Allow(key="user:123", tokens=1)
+
+    Note right of S: Internal Lookup
+    S->>H: get_node("user:123")
+    H-->>S: Target: Shard-1
+
+    rect rgb(240,248,255)
+    Note over S, R: Atomic Rate Limit Check
+    S->>R: EVALSHA script_hash 1 "user:123" cap rate requested
+    Note over R: Lua: leakage, update bucket, compare vs requested
+    R-->>S: allowed: 1, remaining: 15, reset_ms: 500
+    end
+
+    S-->>C: AllowResponse allowed true
 ```
-┌─────────────┐     gRPC      ┌─────────────────┐     Redis     ┌───────┐
-│   Clients   │ ◄──────────►  │  Limiter Server │ ◄──────────►  │ Redis │
-│ (API, CLI)  │               │  (multi-thread) │               │       │
-└─────────────┘               └─────────────────┘               └───────┘
-                                       │
-                                       │ Consistent hashing (for multi-shard)
-                                       ▼
-                              ┌─────────────────┐
-                              │ Redis Shard 2   │  (future)
-                              └─────────────────┘
-```
+
+**Key design points visible in the flow:**
+
+- The hash ring runs in-process (~55 ns) — no extra network hop to find the right shard
+- A single Lua script replaces the WATCH/MULTI/EXEC retry loop — one Redis round-trip, always
+- The server shares one `MultiplexedConnection`; all Tokio tasks clone it O(1) with no new TCP connections
 
 ## Quick Start
 
@@ -125,11 +142,45 @@ The Criterion benchmarks in `limiter-core/benches/bucket.rs` measure the pure in
 ```bash
 # Algorithm micro-benchmarks (no Redis required)
 cargo bench -p limiter-core
-# HTML report: limiter-core/target/criterion/report/index.html
 
 # End-to-end throughput (requires Redis + ghz)
 docker run -d -p 6379:6379 redis:7-alpine
 cargo run -p limiter-server --release &
 ghz --insecure --proto proto/limiter.proto --call limiter.LimiterService/Allow \
-    -d '{"key":"user:bench","tokens":1}' -n 200000 -c 100 localhost:50051
+    -d '{"key":"user:bench","tokens":1}' -n 1000000 -c 200 localhost:50051
 ```
+
+### In-memory algorithm cost (Criterion, Apple M2)
+
+![Criterion micro-benchmarks](img/test_1.png)
+
+All five benchmarks run with 100 samples. The results confirm that Rust-side computation is negligible:
+
+| Operation                                 | Time        |
+| ----------------------------------------- | ----------- |
+| `TokenBucket::allow` (1 token)            | **34.8 ns** |
+| `TokenBucket::try_consume` (10 tokens)    | **34.3 ns** |
+| `ConsistentHashRing::get_node` (3 nodes)  | **54.6 ns** |
+| `BucketState::to_storage` (serialize)     | 136 ns      |
+| `BucketState::from_storage` (deserialize) | 140 ns      |
+
+The hot path (allow + hash lookup) completes in **~90 ns** — two orders of magnitude below a Redis round-trip (~1 ms on localhost). CPU is never the bottleneck; Redis throughput is.
+
+### End-to-end throughput (ghz, Apple M2, Redis on localhost)
+
+![ghz load test — 500k requests, 100 concurrent, 0 errors](img/test_2.png)
+
+500,000 gRPC requests, 100 concurrent workers, **zero errors**:
+
+| Metric           | Value       |
+| ---------------- | ----------- |
+| **Requests/sec** | **33,207**  |
+| Avg latency      | 2.66 ms     |
+| p50              | 2.58 ms     |
+| p75              | 3.03 ms     |
+| p90              | 3.65 ms     |
+| p95              | 4.12 ms     |
+| **p99**          | **5.55 ms** |
+| Error rate       | **0%**      |
+
+> All 500,000 requests returned `[OK]`. The previous run showed 83% errors due to a connection-per-request bug (macOS port exhaustion). Fixing the server to share a single `MultiplexedConnection` eliminated all errors and the true throughput became measurable.

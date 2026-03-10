@@ -1,6 +1,13 @@
 //! gRPC service implementation.
 //!
 //! Uses Redis Lua script for atomic token bucket operations (no race conditions).
+//!
+//! ## Connection sharing
+//!
+//! We store a single `MultiplexedConnection` and clone it per request. Cloning is O(1) —
+//! all clones share the same underlying TCP connection and multiplex commands over it using
+//! internal locking. This avoids the port-exhaustion bug that occurs when opening a new
+//! TCP connection per request under high concurrency (macOS ephemeral port limit ~16k).
 
 use std::sync::Arc;
 
@@ -16,7 +23,9 @@ pub mod limiter {
 use limiter::{limiter_service_server::LimiterService, AllowRequest, AllowResponse, SetLimitRequest, SetLimitResponse};
 
 pub struct LimiterServiceImpl {
-    redis: redis::Client,
+    // One shared multiplexed connection. Clone it per request — all clones share
+    // the same TCP socket. Never call get_multiplexed_tokio_connection() in a hot path.
+    redis: redis::aio::MultiplexedConnection,
     #[allow(dead_code)] // Used when multiple Redis shards
     ring: Arc<ConsistentHashRing<String>>,
     default_capacity: u64,
@@ -27,7 +36,7 @@ const KEY_PREFIX: &str = "limiter:";
 
 impl LimiterServiceImpl {
     pub fn new(
-        redis: redis::Client,
+        redis: redis::aio::MultiplexedConnection,
         ring: Arc<ConsistentHashRing<String>>,
         default_capacity: u64,
         default_refill_rate: f64,
@@ -43,14 +52,6 @@ impl LimiterServiceImpl {
     fn redis_key(&self, key: &str) -> String {
         format!("{}{}", KEY_PREFIX, key)
     }
-
-    async fn get_conn(&self) -> Result<redis::aio::MultiplexedConnection, Status> {
-        self.redis
-            .get_multiplexed_tokio_connection()
-            .await
-            .map_err(|e| Status::internal(format!("Redis connection failed: {}", e)))
-    }
-
 }
 
 #[tonic::async_trait]
@@ -62,7 +63,7 @@ impl LimiterService for LimiterServiceImpl {
         let tokens = req.tokens.max(1);
 
         let redis_key = self.redis_key(&key);
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.redis.clone();
 
         let script = redis::Script::new(crate::lua::ALLOW_SCRIPT);
         let result: i32 = script
@@ -87,7 +88,7 @@ impl LimiterService for LimiterServiceImpl {
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
         let redis_key = self.redis_key(&req.key);
-        let mut conn = self.get_conn().await?;
+        let mut conn = self.redis.clone();
 
         let raw: Option<String> = conn.get(&redis_key).await.map_err(|e| {
             Status::internal(format!("Redis GET failed: {}", e))
