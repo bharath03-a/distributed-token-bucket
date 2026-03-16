@@ -71,16 +71,24 @@ sequenceDiagram
 - Rust 1.70+
 - Redis 6+
 
-### Run
+### Run with Docker
 
 ```bash
-# Terminal 1: Start Redis (Docker)
+docker compose up --build
+```
+
+Server is available at `localhost:50051`. Redis is wired up automatically.
+
+### Run locally (Cargo)
+
+```bash
+# Terminal 1
 docker run -d -p 6379:6379 redis:7-alpine
 
-# Terminal 2: Start server
+# Terminal 2
 cargo run -p limiter-server
 
-# Terminal 3: Use client
+# Terminal 3
 cargo run -p limiter-client -- allow --key user:123
 cargo run -p limiter-client -- set-limit --key user:123 --capacity 10 --refill-rate 2
 ```
