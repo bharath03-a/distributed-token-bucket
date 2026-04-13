@@ -49,7 +49,7 @@ impl<T: Clone + Eq + Hash + std::fmt::Debug> ConsistentHashRing<T> {
         nodes.push(node.clone());
         let mut ring = self.ring.lock().unwrap();
         for i in 0..VIRTUAL_NODES {
-            let hash = hash_key(&format!("{:#?}:{}", node, i));
+            let hash = hash_key(format!("{:#?}:{}", node, i));
             ring.insert(hash, node.clone());
         }
     }
@@ -70,9 +70,10 @@ impl<T: Clone + Eq + Hash + std::fmt::Debug> ConsistentHashRing<T> {
         }
         let hash = hash_key(key);
         // First node with hash >= key hash (clockwise on ring)
-        ring.range(hash..).next().map(|(_, v)| v.clone()).or_else(|| {
-            ring.iter().next().map(|(_, v)| v.clone())
-        })
+        ring.range(hash..)
+            .next()
+            .map(|(_, v)| v.clone())
+            .or_else(|| ring.iter().next().map(|(_, v)| v.clone()))
     }
 }
 

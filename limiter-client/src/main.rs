@@ -50,9 +50,7 @@ enum Commands {
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cli = Cli::parse();
 
-    let channel = Channel::from_shared(cli.server.clone())?
-        .connect()
-        .await?;
+    let channel = Channel::from_shared(cli.server.clone())?.connect().await?;
 
     let mut client = LimiterServiceClient::new(channel);
 

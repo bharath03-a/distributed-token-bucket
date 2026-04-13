@@ -9,8 +9,8 @@ mod service;
 use std::sync::Arc;
 
 use limiter_core::ConsistentHashRing;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use service::LimiterServiceImpl;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -36,7 +36,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let ring: Arc<ConsistentHashRing<String>> = Arc::new(ConsistentHashRing::new());
     ring.add_node(config.redis_url.clone());
 
-    let svc = LimiterServiceImpl::new(conn, ring, config.default_capacity, config.default_refill_rate);
+    let svc = LimiterServiceImpl::new(
+        conn,
+        ring,
+        config.default_capacity,
+        config.default_refill_rate,
+    );
 
     let addr = config.listen_addr.parse()?;
     tracing::info!(%addr, "listening");

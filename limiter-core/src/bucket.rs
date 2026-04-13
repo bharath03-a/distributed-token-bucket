@@ -26,7 +26,9 @@ impl TokenBucketConfig {
             return Err(LimiterError::InvalidConfig("capacity must be > 0".into()));
         }
         if refill_rate <= 0.0 {
-            return Err(LimiterError::InvalidConfig("refill_rate must be > 0".into()));
+            return Err(LimiterError::InvalidConfig(
+                "refill_rate must be > 0".into(),
+            ));
         }
         Ok(Self {
             capacity,
@@ -47,7 +49,10 @@ pub struct BucketState {
 
 impl BucketState {
     pub fn to_storage(&self) -> String {
-        format!("{}:{}:{}", self.tokens, self.last_refill_secs, self.last_refill_nanos)
+        format!(
+            "{}:{}:{}",
+            self.tokens, self.last_refill_secs, self.last_refill_nanos
+        )
     }
 
     pub fn from_storage(s: &str) -> Result<Self, LimiterError> {

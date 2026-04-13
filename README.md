@@ -1,5 +1,11 @@
 # Distributed Token Bucket Rate Limiter
 
+[![CI](https://github.com/bharath03-a/distributed-token-bucket/actions/workflows/ci.yml/badge.svg)](https://github.com/bharath03-a/distributed-token-bucket/actions/workflows/ci.yml)
+[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange?logo=rust)](https://www.rust-lang.org)
+[![Redis](https://img.shields.io/badge/redis-6%2B-red?logo=redis)](https://redis.io)
+[![Docker](https://img.shields.io/badge/docker-compose-blue?logo=docker)](docker-compose.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 A high-performance distributed rate-limiting system built in Rust. Sustains **33,000+ req/s at p99 < 6 ms** (single Redis node, localhost) using token bucket algorithms, Redis Lua scripts for atomic state, gRPC for the API, and consistent hashing for horizontal scaling.
 
 ## Key Concepts (Distributed Systems)
@@ -192,3 +198,25 @@ The hot path (allow + hash lookup) completes in **~90 ns** — two orders of mag
 | Error rate       | **0%**      |
 
 > All 500,000 requests returned `[OK]`. The previous run showed 83% errors due to a connection-per-request bug (macOS port exhaustion). Fixing the server to share a single `MultiplexedConnection` eliminated all errors and the true throughput became measurable.
+
+## CI
+
+The GitHub Actions pipeline runs on every push and pull request to `main`:
+
+| Job | What it checks |
+| --- | -------------- |
+| **fmt** | `cargo fmt --check` — consistent formatting |
+| **clippy** | `cargo clippy -D warnings` — no lints allowed |
+| **test** | `cargo test --all` against a live Redis 7 container |
+| **build** | `cargo build --release --all` — release binary compiles |
+| **bench-check** | `cargo bench --no-run` — benchmarks compile |
+
+## Contributing
+
+1. Fork the repo and create a feature branch.
+2. Run `cargo fmt`, `cargo clippy -- -D warnings`, and `cargo test --all` locally before pushing.
+3. Open a PR against `main` — CI must pass before merge.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

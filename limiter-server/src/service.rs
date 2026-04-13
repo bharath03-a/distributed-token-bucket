@@ -20,7 +20,10 @@ pub mod limiter {
     tonic::include_proto!("limiter");
 }
 
-use limiter::{limiter_service_server::LimiterService, AllowRequest, AllowResponse, SetLimitRequest, SetLimitResponse};
+use limiter::{
+    limiter_service_server::LimiterService, AllowRequest, AllowResponse, SetLimitRequest,
+    SetLimitResponse,
+};
 
 pub struct LimiterServiceImpl {
     // One shared multiplexed connection. Clone it per request — all clones share
@@ -57,7 +60,10 @@ impl LimiterServiceImpl {
 #[tonic::async_trait]
 impl LimiterService for LimiterServiceImpl {
     #[instrument(skip(self, request))]
-    async fn allow(&self, request: Request<AllowRequest>) -> Result<Response<AllowResponse>, Status> {
+    async fn allow(
+        &self,
+        request: Request<AllowRequest>,
+    ) -> Result<Response<AllowResponse>, Status> {
         let req = request.into_inner();
         let key = req.key;
         let tokens = req.tokens.max(1);
@@ -76,13 +82,22 @@ impl LimiterService for LimiterServiceImpl {
             .map_err(|e| Status::internal(format!("Redis script failed: {}", e)))?;
 
         Ok(Response::new(if result == 1 {
-            AllowResponse { allowed: true, message: String::new() }
+            AllowResponse {
+                allowed: true,
+                message: String::new(),
+            }
         } else {
-            AllowResponse { allowed: false, message: "rate limited".into() }
+            AllowResponse {
+                allowed: false,
+                message: "rate limited".into(),
+            }
         }))
     }
 
-    async fn set_limit(&self, request: Request<SetLimitRequest>) -> Result<Response<SetLimitResponse>, Status> {
+    async fn set_limit(
+        &self,
+        request: Request<SetLimitRequest>,
+    ) -> Result<Response<SetLimitResponse>, Status> {
         let req = request.into_inner();
         let config = TokenBucketConfig::new(req.capacity, req.refill_rate)
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
@@ -90,9 +105,10 @@ impl LimiterService for LimiterServiceImpl {
         let redis_key = self.redis_key(&req.key);
         let mut conn = self.redis.clone();
 
-        let raw: Option<String> = conn.get(&redis_key).await.map_err(|e| {
-            Status::internal(format!("Redis GET failed: {}", e))
-        })?;
+        let raw: Option<String> = conn
+            .get(&redis_key)
+            .await
+            .map_err(|e| Status::internal(format!("Redis GET failed: {}", e)))?;
 
         let state = if let Some(s) = raw {
             let parts: Vec<&str> = s.split(':').collect();
@@ -136,6 +152,9 @@ impl LimiterService for LimiterServiceImpl {
             .await
             .map_err(|e| Status::internal(format!("Redis SET failed: {}", e)))?;
 
-        Ok(Response::new(SetLimitResponse { ok: true, error: String::new() }))
+        Ok(Response::new(SetLimitResponse {
+            ok: true,
+            error: String::new(),
+        }))
     }
 }
